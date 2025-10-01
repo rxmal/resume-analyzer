@@ -22,11 +22,15 @@ schema = types.Schema(
 
 tool = types.Tool(function_declarations=[types.FunctionDeclaration(name="analyze_resume", parameters=schema)])
 
-rankings = []
+rankings = {}  # Changed from list to dictionary
+
+def get_rankings_for_role(job_role):
+    """Get rankings for a specific role"""
+    return rankings.get(job_role, [])
 
 def analyze_resume(file, job_role):
     if file is None:
-        return pd.DataFrame(), ""
+        return pd.DataFrame(), [], job_role
     
     try:
         response = client.models.generate_content(
@@ -39,8 +43,12 @@ def analyze_resume(file, job_role):
         
         result = dict(response.candidates[0].content.parts[0].function_call.args)
         
-        rankings.append([result['full_name'], result['match_score']])
-        rankings.sort(key=lambda x: x[1], reverse=True)
+        # Create separate rankings for each job role
+        if job_role not in rankings:
+            rankings[job_role] = []
+        
+        rankings[job_role].append([result['full_name'], result['match_score']])
+        rankings[job_role].sort(key=lambda x: x[1], reverse=True)
         
         details_data = [
             ["Full Name", result['full_name']],
@@ -54,12 +62,17 @@ def analyze_resume(file, job_role):
         
         details_df = pd.DataFrame(details_data, columns=["Field", "Value"])
         
-        return details_df, rankings
+        # Return the job_role as well to update the dropdown
+        return details_df, rankings[job_role], job_role
     
     except Exception as e:
-        return pd.DataFrame([["Error", str(e)]], columns=["Field", "Value"]), rankings
+        current_rankings = rankings.get(job_role, [])
+        return pd.DataFrame([["Error", str(e)]], columns=["Field", "Value"]), current_rankings, job_role
+        
+my_theme = gr.Theme.from_hub("gstaff/sketch") #shivi/calm_seafoam
 
-with gr.Blocks() as app:
+with gr.Blocks(theme=my_theme) as app:
+#with gr.Blocks(theme=gr.themes.Soft()) as app:
     gr.Markdown("# Resume Ranker")
     gr.Markdown("---")
     
@@ -68,7 +81,7 @@ with gr.Blocks() as app:
             job_dropdown = gr.Dropdown(
                 choices=[
                     "Software Engineer",
-                    "Intern",
+                    "Intern (Software Engineer)",
                 ],
                 value="Software Engineer",
                 label="Select Job Role"
@@ -83,12 +96,25 @@ with gr.Blocks() as app:
 
         with gr.Column(scale=1):
             gr.Markdown("## Rankings")
+            view_role_dropdown = gr.Dropdown(
+                choices=[
+                    "Software Engineer",
+                    "Intern (Software Engineer)",
+                ],
+                value="Software Engineer",
+                label="View Rankings For"
+            )
             ranking_table = gr.Dataframe(
                 headers=["Name", "Score"],
                 datatype=["str", "number"],
                 value=[]
             )
     
-    analyze_btn.click(analyze_resume, inputs=[file_input, job_dropdown], outputs=[result_table, ranking_table])
+    analyze_btn.click(
+        analyze_resume, 
+        inputs=[file_input, job_dropdown], 
+        outputs=[result_table, ranking_table, view_role_dropdown]
+    )
+    view_role_dropdown.change(get_rankings_for_role, inputs=[view_role_dropdown], outputs=[ranking_table])
 
 app.launch()
